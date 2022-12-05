@@ -181,6 +181,7 @@ def plots(particles, nsteps, step='leapfrog', savedir=False):
             imageio.mimsave('{}/rk4.gif'.format(savedir), images)
          
 
-parts=nbody(100,100,0.001, periodic=True)
+parts=nbody(100,100,0.001, periodic=False)
 
-plots(parts, 50, step='leapfrog', savedir='images/leapfrog_periodic')
+plt.imshow(parts.density())
+#plots(parts, 50, step='leapfrog', savedir='images/leapfrog_periodic')

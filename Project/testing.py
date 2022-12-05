@@ -8,10 +8,129 @@ Created on Thu Dec  1 15:57:32 2022
 import numpy as np
 import matplotlib.pyplot as plt
 
+def point_charge_V(g, soft_r, b=5):
+    x, y = np.meshgrid(np.linspace(-b,b, g+1), np.linspace(-b,b, g+1))
+    r = np.sqrt(x**2+y**2)
+    r[r<soft_r]=soft_r
+    V = 1/r
+    V=V[:-1,:-1]
+    return V
+    
+class nbody:
+    def __init__(self, n, gridcells, soft_r, x=False, m=False, v=False):
+        self.n = n
+        self.x = np.random.rand(n,2)
+        self.m = np.ones(n)
+        self.v = np.zeros([n,2])
+        self.f = np.zeros([self.n,2])
+        self.g = gridcells
+        self.soft = soft_r
+        self.point = point_charge_V(self.g, self.soft)
+        self.pointft = np.fft.rfft2(self.point)           
+            
+    def density(self):
+        density = np.histogram2d(self.x[:,0],self.x[:,1], bins=self.g, range=[[0,1],[0,1]])[0]
+        self.p = density
+        return self.p
+    
+    def potential(self):
+        density = self.density()
+        densityft = np.fft.rfft2(density)
+        self.pot = np.fft.fftshift(np.fft.irfft2(densityft*self.pointft))
+        
+        return self.pot
+    
+    def force(self):
+        V = self.potential()
+        fx, fy = np.gradient(V)
+        
+        dx = 1/self.g
+        dy = 1/self.g
+        for i in range(len(self.x)):
+        
+            indx, indy = int(self.x[i,0]/dx), int(self.x[i,1]/dy)
+            
+            self.f[i] = np.array([fx[indx,indy],fy[indx,indy]])
+        return self.f
+    
+    def leapfrog(self, dt):
+        self.x=self.x+dt*self.v
+        for i in self.x:
+            if i[0]>1:
+                i[0]=i[0]-1
+            if i[0]<0:
+                i[0]=i[0]+1
+            if i[1]>1:
+                i[1]=i[1]-1
+            if i[1]<0:
+                i[1]=i[1]+1
+        self.v=self.v+self.force()*dt
+         
+
+parts=nbody(10000,200,0.05)
+
+"""
+rho = parts.density()
+pot = parts.potential()
+fx, fy = np.gradient(pot)
+print(parts.x/(1/parts.g))
+plt.imshow(pot)
+#"""
+
+"""
+plt.subplot(1,2,1)
+plt.plot(parts.x[:,0],parts.x[:,1],'.')
+plt.subplot(1,2,2)
+plt.imshow(parts.point)
+plt.colorbar()#"""
+
+#"""
+n=100
+for i in range(n):
+    plt.clf()
+    #plt.plot(parts.x[:,0],parts.x[:,1],'.')
+    plt.imshow(parts.potential())
+    #plt.xlim(0,1)
+    #plt.ylim(0,1)
+    plt.pause(0.001)
+    parts.leapfrog(0.005)
+    #"""
 
 
 
-print(os.getcwd())
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
