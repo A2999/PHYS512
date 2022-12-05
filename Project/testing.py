@@ -89,7 +89,7 @@ n=100
 for i in range(n):
     plt.clf()
     #plt.plot(parts.x[:,0],parts.x[:,1],'.')
-    plt.imshow(parts.potential())
+    plt.pcolormesh(parts.potential())
     #plt.xlim(0,1)
     #plt.ylim(0,1)
     plt.pause(0.001)
