@@ -4,19 +4,15 @@ import cv2
 import os
 import imageio
 
+
 def point_charge_V(g, soft_r, b=5):
-    x, y = np.meshgrid(np.linspace(-b,b, g), np.linspace(-b,b, g))
+    x, y = np.meshgrid(np.linspace(-b,b, g+1), np.linspace(-b,b, g+1))
     r = np.sqrt(x**2+y**2)
     r[r<soft_r]=soft_r
     V = 1/r
+    V=V[:-1,:-1]
     return V
 
-def get_derivs(xv, n, fun):
-    x = xv[:n,:]
-    v = xv[n:,:]
-    f = fun(x)
-    return np.vstack([v,f])
-    
 class nbody:
     def __init__(self, n, gridcells, soft_r, x=False, m=False, v=False, periodic=True):
         self.n = n
@@ -37,6 +33,7 @@ class nbody:
                 print("Number of particles doesn't match number of initial masses.")
                 assert(1==0)
             self.m = m
+        self.mstack = np.vstack((self.m,self.m)).T
         if v is False:
             self.v = np.zeros([n,2])
         else:
@@ -51,13 +48,20 @@ class nbody:
         self.g = gridcells
         self.soft = soft_r
         self.periodic = periodic
+        self.pot = np.zeros([self.g,self.g])
+        if periodic is True:
+            self.point = point_charge_V(self.g, self.soft)
+            self.pointft = np.fft.rfft2(self.point)
+        else:
+            self.point = point_charge_V(2*self.g, self.soft)            
+            self.pointft = np.fft.rfft2(self.point)
             
     def density(self, rk4=False):
         if rk4 is False:
-            density = np.histogram2d(self.x[:,0],self.x[:,1], bins=self.g, weights=self.m)[0]
+            density = np.histogram2d(self.x[:,0],self.x[:,1], bins=self.g, weights=self.m, range=[[0,1],[0,1]])[0]
         else:
-            density = np.histogram2d(rk4[:,0],rk4[:,1], bins=self.g, weights=self.m)[0]
-        
+            density = np.histogram2d(rk4[:,0],rk4[:,1], bins=self.g, weights=self.m, range=[[0,1],[0,1]])[0]
+
         if self.periodic is True:
             self.p = density
         else:
@@ -74,13 +78,9 @@ class nbody:
         densityft = np.fft.rfft2(density)
         
         if self.periodic is True:
-            point = point_charge_V(self.g, self.soft)            
-            pointft = np.fft.rfft2(point)
-            self.pot = np.fft.fftshift(np.fft.irfft2(densityft*pointft))
+            self.pot = np.fft.fftshift(np.fft.irfft2(densityft*self.pointft))
         else:
-            point = point_charge_V(2*self.g, self.soft)            
-            pointft = np.fft.rfft2(point)
-            big = np.fft.fftshift(np.fft.irfft2(densityft*pointft))
+            big = np.fft.fftshift(np.fft.irfft2(densityft*self.pointft))
             self.pot = big[self.g//2:3*self.g//2, self.g//2:3*self.g//2]
             
         return self.pot
@@ -91,97 +91,160 @@ class nbody:
         else:
             V = self.potential(rk4)
         fx, fy = np.gradient(V)
-        dx = (max(self.x[:,0])-min(self.x[:,0]))/self.g
-        dy = (max(self.x[:,1])-min(self.x[:,1]))/self.g
-        if dx==0:
-            dx=1e-9
-        if dy==0:
-            dy=1e-9
+        dx = 1/self.g
+        dy = 1/self.g
         for i in range(len(self.x)):
-            indx, indy = int((self.x[i,0]-min(self.x[:,0]))//dx), int((self.x[i,1]-min(self.x[:,1]))//dy)
-            #print(indx, indy)
-            if indx==self.g: #This has to be done so that the points laying
-                indx=indx-1  #on the far edge are included in the previous
-            if indy==self.g: #gridcell. Ex: g=5, then c0=[0,1),c1=[1,2),
-                indy=indy-1  #c2=[2,3),c3=[3,4),c4=[4,5]
-            self.f[i] = -np.array([fx[indx,indy],fy[indx,indy]])
+            indx, indy = int(self.x[i,0]/dx), int(self.x[i,1]/dy)
+            self.f[i] = np.array([fx[indx,indy],fy[indx,indy]])
         return self.f
     
     def leapfrog(self, dt):
         self.x=self.x+dt*self.v
+        if self.periodic is True:
+            for i in self.x:
+                if i[0]>1:
+                    i[0]=i[0]-1
+                if i[0]<0:
+                    i[0]=i[0]+1
+                if i[1]>1:
+                    i[1]=i[1]-1
+                if i[1]<0:
+                    i[1]=i[1]+1
         self.v=self.v+self.force()*dt
         
+    def get_derivs(self,xx):
+        nn=xx.shape[0]//2
+        x=xx[:nn,:]
+        v=xx[nn:,:]
+        f=self.force(x)
+        return np.vstack([v,f])
+    
     def rk4(self, dt):
         xv = np.vstack([self.x,self.v])
-        k1 = get_derivs(xv, self.n, self.force)
-        k2 = get_derivs(xv+k1*dt/2, self.n, self.force)
-        k3 = get_derivs(xv+k2*dt/2, self.n, self.force)
-        k4 = get_derivs(xv+k3*dt, self.n, self.force)
+        k1 = self.get_derivs(xv)
+        k2 = self.get_derivs(xv+k1*dt/2)
+        k3 = self.get_derivs(xv+k2*dt/2)
+        k4 = self.get_derivs(xv+k3*dt)
         
         tot=(k1+2*k2+2*k3+k4)/6
+        v = tot[:self.n,:]
+        f=tot[self.n:,:]
         
-        self.x = self.x + tot[:self.n,:]*dt
-        self.v = self.v + tot[self.n:,:]*dt
+        self.x = self.x + v*dt
+        if self.periodic is True:
+            for i in self.x:
+                if i[0]>1:
+                    i[0]=i[0]-1
+                if i[0]<0:
+                    i[0]=i[0]+1
+                if i[1]>1:
+                    i[1]=i[1]-1
+                if i[1]<0:
+                    i[1]=i[1]+1
+        self.v = self.v + f*dt
 
 
-def plots(particles, nsteps, step='leapfrog', savedir=False):
+def plots(particles, nsteps, dt, step='leapfrog', savedir=False, Vplots=False, trackE=False):
     if step != 'leapfrog' and step !='rk4':
         print('Only permitted step mehtods are "leapfrog" and "rk4"')
         assert(1==0)
-    if step =='leapfrog':
-        if savedir is False:
-            for i in range(nsteps):
-                plt.clf()
-                plt.plot(particles.x[:,0],particles.x[:,1],'.')
-                plt.xlim(0,1)
-                plt.ylim(0,1)
-                plt.pause(0.001)
-                particles.leapfrog(0.01)
-        else:
-            filenames = []
-            for i in range(nsteps):
-                plt.clf()
-                plt.plot(particles.x[:,0],particles.x[:,1],'.')
-                plt.xlim(0,1)
-                plt.ylim(0,1)
-                plt.pause(0.001)
-                particles.leapfrog(0.01)
+    plt.figure(figsize=(6,6))
+    if savedir is not False:
+        filenames = []
+    if trackE is not False:
+        K = np.zeros(nsteps)
+        U = np.zeros(nsteps)
+        E = np.zeros(nsteps)
+    if step =='leapfrog' and Vplots is not True:
+        for i in range(nsteps):
+            if trackE is not False:
+                K[i] = np.sum(0.5*particles.mstack*particles.v**2)
+                U[i] = np.sum(particles.potential(particles.x))
+                E[i] = K[i]+U[i]
+            plt.clf()
+            plt.plot(particles.x[:,0],particles.x[:,1],'.')
+            plt.xlim(0,1)
+            plt.ylim(0,1)
+            plt.pause(0.001)
+            particles.leapfrog(dt)
+            if savedir is not False:
                 plt.savefig('{}/lf_{}.png'.format(savedir,i))
                 filenames.append('lf_{}.png'.format(i))
+        if savedir is not False:
             images = []
             for file in filenames:
                 img = cv2.imread(os.path.join(savedir,file))
                 images.append(img)
             imageio.mimsave('{}/leapfrog.gif'.format(savedir), images)
+        
+    if step =='leapfrog' and Vplots is True:
+        for i in range(nsteps):
+            if trackE is not False:
+                K[i] = np.sum(0.5*particles.mstack*particles.v**2)
+                U[i] = np.sum(particles.potential(particles.x))
+                E[i] = K[i]+U[i]
+            plt.clf()
+            plt.pcolormesh(particles.pot.T)
+            plt.pause(0.001)
+            particles.leapfrog(dt)
+            if savedir is not False:
+                plt.savefig('{}/lf_V_{}.png'.format(savedir,i))
+                filenames.append('lf_V_{}.png'.format(i))
+        if savedir is not False:
+            images = []
+            for file in filenames:
+                img = cv2.imread(os.path.join(savedir,file))
+                images.append(img)
+            imageio.mimsave('{}/leapfrog_V.gif'.format(savedir), images)
     
-    if step =='rk4':
-        if savedir is False:
-            for i in range(nsteps):
-                plt.clf()
-                plt.plot(particles.x[:,0],particles.x[:,1],'.')
-                plt.xlim(0,1)
-                plt.ylim(0,1)
-                plt.pause(0.001)
-                particles.rk4(0.01)
-        else:
-            filenames = []
-            for i in range(nsteps):
-                plt.clf()
-                plt.plot(particles.x[:,0],particles.x[:,1],'.')
-                plt.xlim(0,1)
-                plt.ylim(0,1)
-                plt.pause(0.001)
-                particles.rk4(0.01)
+    if step =='rk4' and Vplots is not True:
+        for i in range(nsteps):
+            if trackE is not False:
+                K[i] = np.sum(0.5*particles.mstack*particles.v**2)
+                U[i] = np.sum(particles.potential(particles.x))
+                E[i] = K[i]+U[i]
+            plt.clf()
+            plt.plot(particles.x[:,0],particles.x[:,1],'.')
+            plt.xlim(0,1)
+            plt.ylim(0,1)
+            plt.pause(0.001)
+            particles.rk4(dt)
+            if savedir is not False:
                 plt.savefig('{}/rk4_{}.png'.format(savedir,i))
                 filenames.append('rk4_{}.png'.format(i))
+        if savedir is not False:
             images = []
             for file in filenames:
                 img = cv2.imread(os.path.join(savedir,file))
                 images.append(img)
             imageio.mimsave('{}/rk4.gif'.format(savedir), images)
+    
+    if step =='rk4' and Vplots is True:
+        for i in range(nsteps):
+            if trackE is not False:
+                K[i] = np.sum(0.5*particles.mstack*particles.v**2)
+                U[i] = np.sum(particles.potential(particles.x))
+                E[i] = K[i]+U[i]
+            plt.clf()
+            plt.pcolormesh(particles.potential(particles.x).T)
+            plt.pause(0.001)
+            particles.rk4(dt)
+            if savedir is not False:
+                plt.savefig('{}/rk4_V_{}.png'.format(savedir,i))
+                filenames.append('rk4_V_{}.png'.format(i))
+        if savedir is not False:
+            images = []
+            for file in filenames:
+                img = cv2.imread(os.path.join(savedir,file))
+                images.append(img)
+            imageio.mimsave('{}/rk4_V.gif'.format(savedir), images)
+    if trackE is not False:
+        return K, U, E
          
+#circlex = np.array([[0.4,0.5],[0.6,0.5]])
+#circlev = np.array([[0,0.05],[0,-0.05]])
+nparts = 20000
+xs = np.random.rand(nparts,2)/8+0.4375
 
-parts=nbody(100,100,0.001, periodic=False)
-
-plt.imshow(parts.density())
-#plots(parts, 50, step='leapfrog', savedir='images/leapfrog_periodic')
+parts=nbody(nparts,100,0.5, periodic=True)
+plots(parts, 500, 0.005, step='leapfrog', Vplots=False, trackE=False)
