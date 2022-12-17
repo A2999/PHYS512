@@ -44,7 +44,6 @@ class nbody:
                 print("Number of initial positions doesn't match number of initial velocities.")
                 assert(1==0)
             self.v = v
-        self.f = np.zeros([self.n,2])
         self.g = gridcells
         self.soft = soft_r
         self.periodic = periodic
@@ -55,6 +54,9 @@ class nbody:
         else:
             self.point = point_charge_V(2*self.g, self.soft)            
             self.pointft = np.fft.rfft2(self.point)
+            
+            self.lostK = 0
+            self.lostU = 0
             
     def density(self, rk4=False):
         if rk4 is False:
@@ -93,8 +95,13 @@ class nbody:
         fx, fy = np.gradient(V)
         dx = 1/self.g
         dy = 1/self.g
+        self.f = np.empty([len(self.x),2])
         for i in range(len(self.x)):
             indx, indy = int(self.x[i,0]/dx), int(self.x[i,1]/dy)
+            if indx == self.g:
+                indx=indx-1
+            if indy == self.g:
+                indy=indy-1
             self.f[i] = np.array([fx[indx,indy],fy[indx,indy]])
         return self.f
     
@@ -110,6 +117,19 @@ class nbody:
                     i[1]=i[1]-1
                 if i[1]<0:
                     i[1]=i[1]+1
+        else:
+            problems = []
+            for i in range(len(self.x)):
+                if self.x[i,0]>1 or self.x[i,1]>1 or self.x[i,0]<0 or self.x[i,1]<0:
+                    problems.append(i)
+            if len(problems)!=0:
+                for i in problems:
+                    self.lostK = self.lostK + np.sum(0.5*self.mstack[i]*self.v[i]**2)
+                    self.lostU = self.lostU + np.sum(self.pot)/self.n
+                self.x = np.delete(self.x, problems, 0)
+                self.v = np.delete(self.v, problems, 0)
+                self.m = np.delete(self.m, problems)
+                self.mstack = np.delete(self.mstack, problems, 0)
         self.v=self.v+self.force()*dt
         
     def get_derivs(self,xx):
@@ -120,6 +140,7 @@ class nbody:
         return np.vstack([v,f])
     
     def rk4(self, dt):
+        print(np.shape(self.x), np.shape(self.v))
         xv = np.vstack([self.x,self.v])
         k1 = self.get_derivs(xv)
         k2 = self.get_derivs(xv+k1*dt/2)
@@ -127,8 +148,8 @@ class nbody:
         k4 = self.get_derivs(xv+k3*dt)
         
         tot=(k1+2*k2+2*k3+k4)/6
-        v = tot[:self.n,:]
-        f=tot[self.n:,:]
+        v = tot[:len(self.x),:]
+        f=tot[len(self.x):,:]
         
         self.x = self.x + v*dt
         if self.periodic is True:
@@ -141,6 +162,20 @@ class nbody:
                     i[1]=i[1]-1
                 if i[1]<0:
                     i[1]=i[1]+1
+        else:
+            problems = []
+            for i in range(len(self.x)):
+                if self.x[i,0]>1 or self.x[i,1]>1 or self.x[i,0]<0 or self.x[i,1]<0:
+                    problems.append(i)
+            if len(problems)!=0:
+                for i in problems:
+                    self.lostK = self.lostK + np.sum(0.5*self.mstack[i]*self.v[i]**2)
+                    self.lostU = self.lostU + np.sum(self.pot)/self.n
+                self.x = np.delete(self.x, problems, 0)
+                self.v = np.delete(self.v, problems, 0)
+                self.m = np.delete(self.m, problems)
+                self.mstack = np.delete(self.mstack, problems, 0)
+                f = np.delete(f, problems, 0)
         self.v = self.v + f*dt
 
 
@@ -154,13 +189,11 @@ def plots(particles, nsteps, dt, step='leapfrog', savedir=False, Vplots=False, t
     if trackE is not False:
         K = np.zeros(nsteps)
         U = np.zeros(nsteps)
-        E = np.zeros(nsteps)
     if step =='leapfrog' and Vplots is not True:
         for i in range(nsteps):
             if trackE is not False:
-                K[i] = np.sum(0.5*particles.mstack*particles.v**2)
-                U[i] = np.sum(particles.potential(particles.x))
-                E[i] = K[i]+U[i]
+                K[i] = np.sum(0.5*particles.mstack*particles.v**2)+particles.lostK
+                U[i] = np.sum(particles.potential(particles.x))+particles.lostU
             plt.clf()
             plt.plot(particles.x[:,0],particles.x[:,1],'.')
             plt.xlim(0,1)
@@ -180,9 +213,8 @@ def plots(particles, nsteps, dt, step='leapfrog', savedir=False, Vplots=False, t
     if step =='leapfrog' and Vplots is True:
         for i in range(nsteps):
             if trackE is not False:
-                K[i] = np.sum(0.5*particles.mstack*particles.v**2)
-                U[i] = np.sum(particles.potential(particles.x))
-                E[i] = K[i]+U[i]
+                K[i] = np.sum(0.5*particles.mstack*particles.v**2)+particles.lostK
+                U[i] = np.sum(particles.potential(particles.x))+particles.lostU
             plt.clf()
             plt.pcolormesh(particles.pot.T)
             plt.pause(0.001)
@@ -200,9 +232,8 @@ def plots(particles, nsteps, dt, step='leapfrog', savedir=False, Vplots=False, t
     if step =='rk4' and Vplots is not True:
         for i in range(nsteps):
             if trackE is not False:
-                K[i] = np.sum(0.5*particles.mstack*particles.v**2)
-                U[i] = np.sum(particles.potential(particles.x))
-                E[i] = K[i]+U[i]
+                K[i] = np.sum(0.5*particles.mstack*particles.v**2)+particles.lostK
+                U[i] = np.sum(particles.potential(particles.x))+particles.lostU
             plt.clf()
             plt.plot(particles.x[:,0],particles.x[:,1],'.')
             plt.xlim(0,1)
@@ -222,9 +253,8 @@ def plots(particles, nsteps, dt, step='leapfrog', savedir=False, Vplots=False, t
     if step =='rk4' and Vplots is True:
         for i in range(nsteps):
             if trackE is not False:
-                K[i] = np.sum(0.5*particles.mstack*particles.v**2)
-                U[i] = np.sum(particles.potential(particles.x))
-                E[i] = K[i]+U[i]
+                K[i] = np.sum(0.5*particles.mstack*particles.v**2)+particles.lostK
+                U[i] = np.sum(particles.potential(particles.x))+particles.lostU
             plt.clf()
             plt.pcolormesh(particles.potential(particles.x).T)
             plt.pause(0.001)
@@ -239,12 +269,12 @@ def plots(particles, nsteps, dt, step='leapfrog', savedir=False, Vplots=False, t
                 images.append(img)
             imageio.mimsave('{}/rk4_V.gif'.format(savedir), images)
     if trackE is not False:
-        return K, U, E
+        return K, U, K+U
          
-#circlex = np.array([[0.4,0.5],[0.6,0.5]])
-#circlev = np.array([[0,0.05],[0,-0.05]])
-nparts = 20000
-xs = np.random.rand(nparts,2)/8+0.4375
+circlex = np.array([[0.4,0.5],[0.6,0.5]])
+circlev = np.array([[0,0.05],[0,-0.05]])
+nparts = 2000
+xs = np.random.rand(nparts,2)/4+0.375
 
-parts=nbody(nparts,100,0.5, periodic=True)
-plots(parts, 500, 0.005, step='leapfrog', Vplots=False, trackE=False)
+parts=nbody(nparts,100,0.5, x=xs, periodic=False)
+K, U, E = plots(parts, 100, 0.01, step='rk4', Vplots=False, trackE=True)
